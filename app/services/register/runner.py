@@ -15,13 +15,41 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as curl_requests
 
 from app.core.logger import logger
+from app.core.config import get_config
 from app.services.register.services import (
     EmailService,
+    MoeMailService,
     TurnstileService,
     UserAgreementService,
     BirthDateService,
     NsfwSettingsService,
 )
+
+
+def _create_email_service():
+    """Create email service based on config. Returns (service, provider_type)."""
+    provider = str(get_config("register.email_provider", "default") or "default").strip().lower()
+    
+    if provider == "moemail":
+        return MoeMailService(), "moemail"
+    else:
+        return EmailService(), "default"
+
+
+def _get_register_proxy() -> Optional[Dict[str, str]]:
+    """Get proxy config for registration. Returns proxies dict or None."""
+    proxy_url = str(get_config("register.register_proxy", "") or "").strip()
+    if proxy_url:
+        return {"http": proxy_url, "https": proxy_url}
+    return None
+
+
+def _get_register_timeout() -> int:
+    """Get timeout config for registration requests."""
+    try:
+        return int(get_config("register.register_timeout", 30) or 30)
+    except (ValueError, TypeError):
+        return 30
 
 
 SITE_URL = "https://accounts.x.ai"
@@ -203,7 +231,8 @@ class RegisterRunner:
             "referer": f"{SITE_URL}/sign-up?redirect=grok-com",
         }
         try:
-            res = session.post(url, data=data, headers=headers, timeout=15)
+            timeout = _get_register_timeout()
+            res = session.post(url, data=data, headers=headers, timeout=timeout)
             return res.status_code == 200
         except Exception as exc:
             self._record_error(f"send code error: {email} - {exc}")
@@ -220,7 +249,8 @@ class RegisterRunner:
             "referer": f"{SITE_URL}/sign-up?redirect=grok-com",
         }
         try:
-            res = session.post(url, data=data, headers=headers, timeout=15)
+            timeout = _get_register_timeout()
+            res = session.post(url, data=data, headers=headers, timeout=timeout)
             return res.status_code == 200
         except Exception as exc:
             self._record_error(f"verify code error: {email} - {exc}")
@@ -230,7 +260,7 @@ class RegisterRunner:
         time.sleep(random.uniform(0, 5))
 
         try:
-            email_service = EmailService()
+            email_service, email_provider = _create_email_service()
             turnstile_service = TurnstileService()
             user_agreement_service = UserAgreementService()
             birth_date_service = BirthDateService()
@@ -248,15 +278,17 @@ class RegisterRunner:
             try:
                 impersonate_fingerprint, account_user_agent = _random_chrome_profile()
 
-                with curl_requests.Session(impersonate=impersonate_fingerprint) as session:
+                proxies = _get_register_proxy()
+                timeout = _get_register_timeout()
+                with curl_requests.Session(impersonate=impersonate_fingerprint, proxies=proxies) as session:
                     try:
-                        session.get(SITE_URL, timeout=10)
+                        session.get(SITE_URL, timeout=timeout)
                     except Exception:
                         pass
 
                     password = _generate_random_string()
 
-                    jwt, email = email_service.create_email()
+                    email_token, email = email_service.create_email()
                     if not email:
                         self._record_error("create_email failed")
                         time.sleep(5)
@@ -271,16 +303,20 @@ class RegisterRunner:
                         continue
 
                     verify_code = None
-                    for _ in range(30):
+                    for attempt in range(30):
                         time.sleep(1)
                         if self.stop_event.is_set():
                             return
-                        content = email_service.fetch_first_email(jwt)
+                        content = email_service.fetch_first_email(email_token)
                         if content:
+                            logger.info(f"[Register] Email content received (len={len(content)}): {content[:300]}...")
                             match = re.search(r">([A-Z0-9]{3}-[A-Z0-9]{3})<", content)
                             if match:
                                 verify_code = match.group(1).replace("-", "")
+                                logger.info(f"[Register] Extracted verify code: {verify_code} for {email}")
                                 break
+                            else:
+                                logger.info(f"[Register] No verify code match in content, attempt {attempt+1}")
 
                     if not verify_code:
                         self._record_error(f"verify_code not received: {email}")

@@ -1,5 +1,8 @@
 ﻿let apiKey = '';
 let currentConfig = {};
+const DEFAULT_EMAIL_FIELDS = new Set(['worker_domain', 'email_domain', 'admin_password']);
+const MOEMAIL_FIELDS = new Set(['moemail_api_url', 'moemail_api_key', 'moemail_domain']);
+
 const NUMERIC_FIELDS = new Set([
   'timeout',
   'max_retry',
@@ -71,9 +74,15 @@ const LOCALE_MAP = {
   },
   "register": {
     "label": "自动注册",
-    "worker_domain": { title: "Worker 域名", desc: "临时邮箱 Worker 的域名（不含 https://）。" },
-    "email_domain": { title: "邮箱域名", desc: "临时邮箱使用的域名，如 example.com。" },
-    "admin_password": { title: "邮箱管理密码", desc: "Worker 后台的管理密钥。" },
+    "email_provider": { title: "邮件提供者", desc: "选择邮件服务：default（原有服务）或 moemail（MoeMail API）。" },
+    "worker_domain": { title: "Worker 域名", desc: "[默认服务] 临时邮箱 Worker 的域名（不含 https://）。" },
+    "email_domain": { title: "邮箱域名", desc: "[默认服务] 临时邮箱使用的域名，如 example.com。" },
+    "admin_password": { title: "邮箱管理密码", desc: "[默认服务] Worker 后台的管理密钥。" },
+    "moemail_api_url": { title: "MoeMail API 地址", desc: "[MoeMail] API 基础地址，如 https://bikaqiuruanjian.com。" },
+    "moemail_api_key": { title: "MoeMail API 密钥", desc: "[MoeMail] 用于调用 MoeMail API 的 X-API-Key。" },
+    "moemail_domain": { title: "MoeMail 邮箱域名", desc: "[MoeMail] 生成邮箱使用的域名，如 moemail.app。" },
+    "register_proxy": { title: "注册代理", desc: "用于自动注册的代理地址，支持 http://user:pass@host:port 或 socks5://host:port 格式。" },
+    "register_timeout": { title: "注册超时", desc: "注册请求超时时间（秒），默认 30。如果代理较慢可适当增大。" },
     "yescaptcha_key": { title: "YesCaptcha Key", desc: "可选。填写后优先使用 YesCaptcha。" },
     "solver_url": { title: "Solver 地址", desc: "本地 Turnstile Solver 地址，默认 http://127.0.0.1:5072。" },
     "solver_browser_type": { title: "Solver 浏览器", desc: "Solver 使用的浏览器类型：chromium / chrome / msedge / camoufox。建议使用 camoufox（对 accounts.x.ai 成功率更高）。" },
@@ -172,6 +181,15 @@ function renderConfig(data) {
       // Container
       const fieldCard = document.createElement('div');
       fieldCard.className = 'config-field';
+      
+      // Mark email provider specific fields for dynamic show/hide
+      if (section === 'register') {
+        if (DEFAULT_EMAIL_FIELDS.has(key)) {
+          fieldCard.dataset.emailProvider = 'default';
+        } else if (MOEMAIL_FIELDS.has(key)) {
+          fieldCard.dataset.emailProvider = 'moemail';
+        }
+      }
 
       // Title
       const titleEl = document.createElement('div');
@@ -264,6 +282,35 @@ function renderConfig(data) {
 
         inputWrapper.appendChild(input);
       }
+      else if (key === 'email_provider') {
+        input = document.createElement('select');
+        input.className = 'geist-input h-[34px]';
+        input.dataset.section = section;
+        input.dataset.key = key;
+
+        const opts = [
+          { val: 'default', text: '默认服务' },
+          { val: 'moemail', text: 'MoeMail' }
+        ];
+
+        opts.forEach(opt => {
+          const option = document.createElement('option');
+          option.value = opt.val;
+          option.text = opt.text;
+          if (val === opt.val) option.selected = true;
+          input.appendChild(option);
+        });
+        
+        // Add change listener to toggle visibility of provider-specific fields
+        input.addEventListener('change', function() {
+          toggleEmailProviderFields(this.value);
+        });
+        
+        inputWrapper.appendChild(input);
+        
+        // Initial toggle after render
+        setTimeout(() => toggleEmailProviderFields(val), 0);
+      }
       else if (Array.isArray(val) || typeof val === 'object') {
         input = document.createElement('textarea');
         input.className = 'geist-input font-mono text-xs';
@@ -299,6 +346,44 @@ function renderConfig(data) {
 
           wrapper.appendChild(input);
           wrapper.appendChild(copyBtn);
+          inputWrapper.appendChild(wrapper);
+        } else if (key === 'register_proxy') {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'config-secret-row';
+          input.className = 'geist-input';
+
+          const testBtn = document.createElement('button');
+          testBtn.className = 'config-copy-btn';
+          testBtn.type = 'button';
+          testBtn.title = '测试代理';
+          testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
+
+          testBtn.onclick = async () => {
+            testBtn.disabled = true;
+            testBtn.innerHTML = '...';
+            try {
+              const proxyUrl = input.value.trim();
+              const resp = await fetch('/api/v1/admin/test-proxy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+                body: JSON.stringify({ proxy_url: proxyUrl })
+              });
+              const data = await resp.json();
+              if (resp.ok) {
+                alert(`代理测试成功！\n出口 IP: ${data.ip}`);
+              } else {
+                alert(`代理测试失败: ${data.detail || '未知错误'}`);
+              }
+            } catch (e) {
+              alert(`代理测试失败: ${e.message}`);
+            } finally {
+              testBtn.disabled = false;
+              testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
+            }
+          };
+
+          wrapper.appendChild(input);
+          wrapper.appendChild(testBtn);
           inputWrapper.appendChild(wrapper);
         } else {
           inputWrapper.appendChild(input);
@@ -397,6 +482,19 @@ async function copyToClipboard(text, btn) {
     }, 2000);
   } catch (err) {
     console.error('Failed to copy', err);
+  }
+}
+
+function toggleEmailProviderFields(provider) {
+  const defaultFields = document.querySelectorAll('[data-email-provider="default"]');
+  const moemailFields = document.querySelectorAll('[data-email-provider="moemail"]');
+  
+  if (provider === 'moemail') {
+    defaultFields.forEach(el => el.style.display = 'none');
+    moemailFields.forEach(el => el.style.display = '');
+  } else {
+    defaultFields.forEach(el => el.style.display = '');
+    moemailFields.forEach(el => el.style.display = 'none');
   }
 }
 

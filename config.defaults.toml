@@ -43,9 +43,24 @@ assets_delete_batch_size = 10
 admin_assets_batch_size = 10
 
 [register]
+# Email provider: "default" or "moemail"
+email_provider = "default"
+
+# Default email service settings
 worker_domain = ""
 email_domain = ""
 admin_password = ""
+
+# MoeMail settings (when email_provider = "moemail")
+moemail_api_url = ""
+moemail_api_key = ""
+moemail_domain = ""
+
+# 注册代理 | 用于自动注册的代理地址，支持 http://user:pass@host:port 或 socks5://host:port 格式
+register_proxy = ""
+# 注册请求超时 | 单位秒，默认 30。如果代理较慢可适当增大
+register_timeout = 30
+
 yescaptcha_key = ""
 solver_url = "http://127.0.0.1:5072"
 # 推荐 camoufox（对 accounts.x.ai 的 Turnstile 成功率更高）；若环境未安装会自动回退到 chromium。

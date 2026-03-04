@@ -366,6 +366,34 @@ async def update_config_api(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/api/v1/admin/test-proxy", dependencies=[Depends(verify_api_key)])
+async def test_proxy_api(data: dict):
+    """测试代理连接并返回出口 IP"""
+    import httpx
+    
+    proxy_url = data.get("proxy_url", "").strip()
+    if not proxy_url:
+        proxy_url = get_config("register.register_proxy", "")
+    
+    if not proxy_url:
+        raise HTTPException(status_code=400, detail="未配置代理地址")
+    
+    try:
+        async with httpx.AsyncClient(proxy=proxy_url, timeout=10) as client:
+            resp = await client.get("https://api.ipify.org?format=json")
+            if resp.status_code == 200:
+                ip_data = resp.json()
+                return {"status": "success", "ip": ip_data.get("ip", "unknown"), "proxy": proxy_url}
+            else:
+                raise HTTPException(status_code=502, detail=f"代理请求失败: {resp.status_code}")
+    except httpx.ProxyError as e:
+        raise HTTPException(status_code=502, detail=f"代理连接失败: {str(e)}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="代理连接超时")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
+
+
 def _display_key(key: str) -> str:
     k = str(key or "")
     if len(k) <= 12:
